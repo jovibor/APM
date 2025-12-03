@@ -1,5 +1,5 @@
 ## Android Package Manager
-**APM** is a simple application for uninstalling packages from android devices, that can't be uninstalled from the device itself. **APM** doesn't require root and uses official **ADB** means.
+**APM** is a simple application for managing packages in android devices. It provides the **Install**, **Uninstall**, **Disable**, **Enable**, **Restore** abilities, and doesn't even require root, using only official **ADB** means.
 
 ## How to Use
 1. Enable developer options on your device in the **Developer options** menu  

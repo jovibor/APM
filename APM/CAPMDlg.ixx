@@ -50,6 +50,7 @@ private:
 	[[nodiscard]] auto GetCurrOperType()const -> ADB::EOperType;
 	BOOL OnInitDialog()override;
 	afx_msg void OnBtnDevices();
+	afx_msg void OnBtnInstallAPK();
 	afx_msg void OnBtnPkgsShow();
 	afx_msg void OnBtnPkgsOperate();
 	afx_msg void OnComboDevicesSelChange();
@@ -83,6 +84,7 @@ private:
 
 BEGIN_MESSAGE_MAP(CAPMDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BTN_DEVICES, &CAPMDlg::OnBtnDevices)
+	ON_BN_CLICKED(IDC_BTN_INSTALL, &CAPMDlg::OnBtnInstallAPK)
 	ON_BN_CLICKED(IDC_BTN_PKGSSHOW, &CAPMDlg::OnBtnPkgsShow)
 	ON_BN_CLICKED(IDC_BTN_OPERATE, &CAPMDlg::OnBtnPkgsOperate)
 	ON_CBN_SELCHANGE(IDC_CMB_DEVICES, &CAPMDlg::OnComboDevicesSelChange)
@@ -206,7 +208,8 @@ void CAPMDlg::OnBtnDevices()
 
 	if (!m_vecDevices.empty()) {
 		for (const auto& [index, dev] : std::views::enumerate(m_vecDevices)) {
-			m_cmbDevices.SetItemData(m_cmbDevices.AddString(dev.wstrModel.data()), index);
+			const auto wstr = std::format(L"{} ({})", dev.wstrModel, dev.wstrName);
+			m_cmbDevices.SetItemData(m_cmbDevices.AddString(wstr.data()), index);
 		}
 
 		m_cmbDevices.SetCurSel(0);
@@ -214,7 +217,56 @@ void CAPMDlg::OnBtnDevices()
 
 	OnComboDevicesSelChange();
 	GetDlgItem(IDC_BTN_PKGSSHOW)->EnableWindow(m_cmbDevices.GetCount() > 0);
+	GetDlgItem(IDC_BTN_INSTALL)->EnableWindow(m_cmbDevices.GetCount() > 0);
 	pBtnDevs->EnableWindow(TRUE);
+}
+
+void CAPMDlg::OnBtnInstallAPK()
+{
+	IFileOpenDialog *pIFOD { };
+	if (::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pIFOD)) != S_OK) {
+		return;
+	}
+
+	DWORD dwFlags;
+	pIFOD->GetOptions(&dwFlags);
+	pIFOD->SetOptions(dwFlags | FOS_FORCEFILESYSTEM | FOS_OVERWRITEPROMPT | FOS_ALLOWMULTISELECT
+		| FOS_DONTADDTORECENT | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST);
+	COMDLG_FILTERSPEC arrFilter[] { { .pszName { L"APK (*.apk)" }, .pszSpec { L"*.apk" } },
+		{ .pszName { L"All files (*.*)" }, .pszSpec { L"*.*" } } };
+	pIFOD->SetFileTypes(2, arrFilter);
+
+	if (pIFOD->Show(m_hWnd) != S_OK) //Cancel was pressed.
+		return;
+
+	IShellItemArray* pResults { };
+	pIFOD->GetResults(&pResults);
+	if (pResults == nullptr) {
+		return;
+	}
+
+	DWORD dwCount { };
+	pResults->GetCount(&dwCount);
+	for (auto itFile { 0U }; itFile < dwCount; ++itFile) {
+		IShellItem* pItem { };
+		pResults->GetItemAt(itFile, &pItem);
+		if (pItem == nullptr) {
+			return;
+		}
+
+		wchar_t* pwszPath;
+		pItem->GetDisplayName(SIGDN_FILESYSPATH, &pwszPath);
+		const std::wstring wstrAPK = L"\"" + std::wstring(pwszPath) + L"\""; //Put path in quotes.
+		m_adb.PkgOperate(GetCurrDevice().wstrName, wstrAPK, ADB::EOperType::OPER_INSTALL);
+		pItem->Release();
+		::CoTaskMemFree(pwszPath);
+	}
+
+	pResults->Release();
+	pIFOD->Release();
+
+	::Sleep(300); //Delay to correctly get renewed packages list from a device.
+	OnBtnPkgsShow();
 }
 
 void CAPMDlg::OnBtnPkgsShow()
@@ -251,14 +303,16 @@ void CAPMDlg::OnBtnPkgsOperate()
 		if (MessageBoxW(wsvMsg.data(), L"Warning!", MB_ICONINFORMATION | MB_YESNO) == IDNO) {
 			return;
 		}
+
 	}
 
 	int iItem { -1 };
 	for (auto i { 0UL }; i < m_list.GetSelectedCount(); ++i) {
 		iItem = m_list.GetNextItem(iItem, LVNI_SELECTED);
-		m_adb.PkgOperate(GetCurrDevice().wstrName, m_vecListItems[m_vecFilteredIdxs[iItem]].wstrData, GetCurrOperType());
+		m_adb.PkgOperate(GetCurrDevice().wstrName, m_vecListItems[m_vecFilteredIdxs[iItem]].wstrData, eOperType);
 	}
 	m_list.SetItemState(-1, 0, LVIS_SELECTED); //Unselect all.
+	m_list.RedrawWindow();
 
 	::Sleep(300); //Delay to correctly get renewed packages list from a device.
 	OnBtnPkgsShow();

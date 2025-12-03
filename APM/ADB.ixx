@@ -25,13 +25,13 @@ public:
 		std::wstring wstrModel;
 	};
 	enum class EPkgsType { PKGS_ENABLED, PKGS_DISABLED, PKGS_SYSTEM, PKGS_THRDPARTY, PKGS_UNINSTALLED };
-	enum class EOperType { OPER_ENABLE, OPER_DISABLE, OPER_UNINSTALL, OPER_RESTORE };
+	enum class EOperType { OPER_ENABLE, OPER_DISABLE, OPER_UNINSTALL, OPER_RESTORE, OPER_INSTALL };
 	ADB() = default;
 	~ADB();
 	[[nodiscard]] auto GetPackagesList(std::wstring_view wsvDevice, EPkgsType eType) -> std::vector<std::wstring>;
 	[[nodiscard]] auto GetDevices() -> std::vector<ADBDEVICE>;
 	bool KillServer();
-	void PkgOperate(std::wstring_view wsvDevice, std::wstring_view wsvPkgName, EOperType eOper);
+	bool PkgOperate(std::wstring_view wsvDevice, std::wstring_view wsvPkgName, EOperType eOper);
 	bool StartServer();
 private:
 	bool Execute(std::wstring_view wsvCMD);
@@ -86,10 +86,17 @@ auto ADB::GetPackagesList(std::wstring_view wsvDevice, EPkgsType eType)->std::ve
 
 		Execute(std::format(L"adb -s {} shell pm list packages {}", wsvDevice, wsvCmdPkgType).data());
 		vecPkgs = ReadFromPipe() | std::views::split(L"\r\n"sv)
-			| std::views::transform([](auto&& s) { return s | std::views::drop(8); })
+			| std::views::transform([](auto&& s) { return s | std::views::drop(8); }) //drop "package:".
 			| std::ranges::to<std::vector<std::wstring>>();
 	}
+
 	std::erase_if(vecPkgs, [](const std::wstring& wstr) { return wstr.empty(); });
+	for (auto& wstr : vecPkgs) {
+		if (const auto it = std::ranges::find_if(wstr, [](const wchar_t wch) {
+			return wch < 0x20 || wch > 0x7E; }); it != wstr.end()) { //Find any non printable wchars.
+			wstr.resize(it - wstr.begin());
+		}
+	}
 
 	return vecPkgs;
 }
@@ -106,17 +113,20 @@ auto ADB::GetDevices()->std::vector<ADBDEVICE>
 		return { };
 	}
 
-	//Drop first text line: "List of devices attached\r\n"
-	auto vecNames = ReadFromPipe() | std::views::drop(26) | std::views::split(L"\tdevice\r\n"sv)
+	//Drop first text line: "List of devices attached\r\n", and split on CRLF.
+	auto vecNamesAll = ReadFromPipe() | std::views::drop(26) | std::views::split(L"\r\n"sv)
 		| std::ranges::to<std::vector<std::wstring>>();
 
-	//Device name is printed as 8 symbols, so erase any "CRLF" or other garbage.
-	std::erase_if(vecNames, [](const std::wstring& wstr) { return wstr.size() < 8; });
+	//Device name is printed as, at least, 8 symbols, so erase any empty strings and offline devices.
+	std::erase_if(vecNamesAll, [](const std::wstring& wstr) { return (wstr.size() < 8) || wstr.contains(L"offline"); });
 
 	std::vector<ADBDEVICE> vecRet;
-	for (const auto& wstrName : vecNames) {
-		Execute(std::format(L"adb -s {} shell getprop ro.product.model", wstrName).data());
-		vecRet.emplace_back(ADBDEVICE { .wstrName { std::move(wstrName) }, .wstrModel { ReadFromPipe() } });
+	for (const auto& wstr : vecNamesAll) {
+		if (const auto sPos = wstr.find(L"\tdevice"); sPos != std::wstring::npos) {
+			const auto wsvName = std::wstring_view(wstr).substr(0, sPos);
+			Execute(std::format(L"adb -s {} shell getprop ro.product.model", wsvName));
+			vecRet.emplace_back(ADBDEVICE { .wstrName { wsvName }, .wstrModel { ReadFromPipe() } });
+		}
 	}
 
 	return vecRet;
@@ -126,7 +136,7 @@ bool ADB::KillServer() {
 	return Execute(L"adb kill-server");
 }
 
-void ADB::PkgOperate(std::wstring_view wsvDevice, std::wstring_view wsvPkgName, EOperType eOper)
+bool ADB::PkgOperate(std::wstring_view wsvDevice, std::wstring_view wsvPkgName, EOperType eOper)
 {
 	using enum EOperType;
 
@@ -144,11 +154,14 @@ void ADB::PkgOperate(std::wstring_view wsvDevice, std::wstring_view wsvPkgName, 
 	case OPER_RESTORE:
 		wsvFmt = L"adb -s {} shell cmd package install-existing {}";
 		break;
-	default:
+	case OPER_INSTALL:
+		wsvFmt = L"adb -s {} install --user 0 {}";
 		break;
+	default:
+		return false;
 	}
 
-	Execute(std::vformat(wsvFmt, std::make_wformat_args(wsvDevice, wsvPkgName)));
+	return Execute(std::vformat(wsvFmt, std::make_wformat_args(wsvDevice, wsvPkgName)));
 }
 
 bool ADB::StartServer() {
