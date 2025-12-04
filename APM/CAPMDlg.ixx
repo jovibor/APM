@@ -9,7 +9,7 @@ import ADB;
 import std;
 
 constexpr auto APM_VERSION_MAJOR = 1;
-constexpr auto APM_VERSION_MINOR = 0;
+constexpr auto APM_VERSION_MINOR = 1;
 constexpr auto APM_VERSION_PATCH = 0;
 
 #ifdef _DEBUG
@@ -62,7 +62,9 @@ private:
 	afx_msg void OnListColumnClick(NMHDR* pNMHDR, LRESULT* pResult);
 	afx_msg void OnListGetDispInfo(NMHDR* pNMHDR, LRESULT* pResult);
 	afx_msg void OnListItemChanged(NMHDR* pNMHDR, LRESULT* pResult);
+	afx_msg void OnListRClick(NMHDR* pNMHDR, LRESULT* pResult);
 	afx_msg void OnMeasureItem(int nIDCtl, LPMEASUREITEMSTRUCT pMIS);
+	afx_msg void OnMenuListCopy();
 	afx_msg void OnSysCommand(UINT nID, LPARAM lParam);
 	void RecalcIndexes();
 	void SetStateBtnOperate();
@@ -80,6 +82,7 @@ private:
 	CComboBox m_cmbDevices;
 	CComboBox m_cmbPkgsType;
 	CComboBox m_cmbOperType;
+	CMenu m_menuList;
 };
 
 BEGIN_MESSAGE_MAP(CAPMDlg, CDialogEx)
@@ -90,10 +93,12 @@ BEGIN_MESSAGE_MAP(CAPMDlg, CDialogEx)
 	ON_CBN_SELCHANGE(IDC_CMB_DEVICES, &CAPMDlg::OnComboDevicesSelChange)
 	ON_CBN_SELCHANGE(IDC_CMB_PKGSTYPE, &CAPMDlg::OnComboPkgsTypesSelChange)
 	ON_CBN_SELCHANGE(IDC_CMB_OPERTYPE, &CAPMDlg::OnComboOperTypeSelChange)
+	ON_COMMAND(IDM_LIST_COPY, &CAPMDlg::OnMenuListCopy)
 	ON_EN_CHANGE(IDC_EDIT_FILTER, &CAPMDlg::OnEditFilterChange)
 	ON_NOTIFY(LVN_COLUMNCLICK, IDC_LIST, &CAPMDlg::OnListColumnClick)
 	ON_NOTIFY(LVN_GETDISPINFOW, IDC_LIST, &CAPMDlg::OnListGetDispInfo)
 	ON_NOTIFY(LVN_ITEMCHANGED, IDC_LIST, &CAPMDlg::OnListItemChanged)
+	ON_NOTIFY(NM_RCLICK, IDC_LIST, &CAPMDlg::OnListRClick)
 	ON_WM_DESTROY()
 	ON_WM_DRAWITEM()
 	ON_WM_MEASUREITEM()
@@ -178,6 +183,8 @@ BOOL CAPMDlg::OnInitDialog()
 	const auto uCloseServer = AfxGetApp()->GetProfileIntW(L"", L"close-adb-server-on-exit", 0);
 	CheckDlgButton(IDC_CHK_CLOSESRVONEXIT, uCloseServer > 0 ? BST_CHECKED : BST_UNCHECKED);
 	FillComboOperType();
+
+	m_menuList.LoadMenuW(IDR_MENU_LIST);
 
 	ASSERT((IDM_ABOUTBOX & 0xFFF0) == IDM_ABOUTBOX);
 	ASSERT(IDM_ABOUTBOX < 0xF000);
@@ -382,7 +389,7 @@ void CAPMDlg::OnEditFilterChange() {
 	RecalcIndexes();
 }
 
-void CAPMDlg::OnListColumnClick(NMHDR *pNMHDR, LRESULT* /*pResult*/)
+void CAPMDlg::OnListColumnClick(NMHDR* pNMHDR, LRESULT* /*pResult*/)
 {
 	int iItem { -1 };
 	for (auto i { 0UL }; i < m_list.GetSelectedCount(); ++i) {
@@ -419,6 +426,13 @@ void CAPMDlg::OnListItemChanged(NMHDR* pNMHDR, LRESULT* /*pResult*/) {
 	SetStateBtnOperate();
 }
 
+void CAPMDlg::OnListRClick(NMHDR* pNMHDR, LRESULT* /*pResult*/)
+{
+	POINT pt;
+	::GetCursorPos(&pt);
+	m_menuList.GetSubMenu(0)->TrackPopupMenu(TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON, pt.x, pt.y, this);
+}
+
 void CAPMDlg::OnMeasureItem(int nIDCtl, LPMEASUREITEMSTRUCT pMIS)
 {
 	if (nIDCtl == IDC_LIST) {
@@ -427,6 +441,38 @@ void CAPMDlg::OnMeasureItem(int nIDCtl, LPMEASUREITEMSTRUCT pMIS)
 	}
 
 	CDialogEx::OnMeasureItem(nIDCtl, pMIS);
+}
+
+void CAPMDlg::OnMenuListCopy()
+{
+	const auto uSelected = m_list.GetSelectedCount();
+	if (uSelected == 0)
+		return;
+
+	std::wstring wstrData;
+	int iItem { -1 };
+	for (auto i { 0UL }; i < uSelected; ++i) {
+		iItem = m_list.GetNextItem(iItem, LVNI_SELECTED);
+		wstrData += m_vecListItems[m_vecFilteredIdxs[static_cast<size_t>(iItem)]].wstrData;
+		if (i < (uSelected - 1)) {
+			wstrData += L'\r';
+		}
+	}
+
+	std::size_t sizeInBytes = wstrData.size() * sizeof(wchar_t) + sizeof(wchar_t);
+	const auto hMem = ::GlobalAlloc(GMEM_MOVEABLE, sizeInBytes);
+	if (!hMem) {
+		::CloseClipboard();
+		return;
+	}
+
+	const auto lpMemLock = ::GlobalLock(hMem);
+	std::memcpy(lpMemLock, wstrData.data(), sizeInBytes);
+	::GlobalUnlock(hMem);
+	::OpenClipboard(m_hWnd);
+	::EmptyClipboard();
+	::SetClipboardData(CF_UNICODETEXT, hMem);
+	::CloseClipboard();
 }
 
 void CAPMDlg::OnSysCommand(UINT nID, LPARAM lParam)
