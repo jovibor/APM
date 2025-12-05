@@ -4,8 +4,9 @@ module;
 #include "resource.h"
 export module CAPMDlg;
 
-import ListEx;
 import ADB;
+import CAPMDlgLog;
+import ListEx;
 import std;
 
 constexpr auto APM_VERSION_MAJOR = 1;
@@ -48,24 +49,29 @@ private:
 	[[nodiscard]] auto GetCurrDevice()const -> const ADB::ADBDEVICE&;
 	[[nodiscard]] auto GetCurrPkgsType()const -> ADB::EPkgsType;
 	[[nodiscard]] auto GetCurrOperType()const -> ADB::EOperType;
-	BOOL OnInitDialog()override;
 	afx_msg void OnBtnDevices();
 	afx_msg void OnBtnInstallAPK();
 	afx_msg void OnBtnPkgsShow();
 	afx_msg void OnBtnPkgsOperate();
+	void OnCancel()override;
 	afx_msg void OnComboDevicesSelChange();
 	afx_msg void OnComboPkgsTypesSelChange();
 	afx_msg void OnComboOperTypeSelChange();
 	afx_msg void OnDestroy();
+	void OnDlgLog();
 	afx_msg void OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT pDIS);
 	afx_msg void OnEditFilterChange();
+	BOOL OnInitDialog()override;
+	afx_msg void OnInitMenuPopup(CMenu* pPopupMenu, UINT nIndex, BOOL bSysMenu);
 	afx_msg void OnListColumnClick(NMHDR* pNMHDR, LRESULT* pResult);
 	afx_msg void OnListGetDispInfo(NMHDR* pNMHDR, LRESULT* pResult);
 	afx_msg void OnListItemChanged(NMHDR* pNMHDR, LRESULT* pResult);
 	afx_msg void OnListRClick(NMHDR* pNMHDR, LRESULT* pResult);
 	afx_msg void OnMeasureItem(int nIDCtl, LPMEASUREITEMSTRUCT pMIS);
 	afx_msg void OnMenuListCopy();
+	void OnOK()override;
 	afx_msg void OnSysCommand(UINT nID, LPARAM lParam);
+	BOOL PreTranslateMessage(MSG* pMsg)override;
 	void RecalcIndexes();
 	void SetStateBtnOperate();
 	DECLARE_MESSAGE_MAP()
@@ -79,6 +85,7 @@ private:
 	std::vector<ADB::ADBDEVICE> m_vecDevices;
 	std::vector<LISTITEM> m_vecListItems;
 	std::vector<std::size_t> m_vecFilteredIdxs;
+	CAPMDlgLog m_dlgLog;
 	CComboBox m_cmbDevices;
 	CComboBox m_cmbPkgsType;
 	CComboBox m_cmbOperType;
@@ -103,6 +110,7 @@ BEGIN_MESSAGE_MAP(CAPMDlg, CDialogEx)
 	ON_WM_DRAWITEM()
 	ON_WM_MEASUREITEM()
 	ON_WM_SYSCOMMAND()
+	ON_WM_INITMENUPOPUP()
 END_MESSAGE_MAP()
 
 void CAPMDlg::DoDataExchange(CDataExchange* pDX) {
@@ -157,51 +165,6 @@ auto CAPMDlg::GetCurrPkgsType()const->ADB::EPkgsType {
 
 auto CAPMDlg::GetCurrOperType()const->ADB::EOperType {
 	return static_cast<ADB::EOperType>(m_cmbOperType.GetItemData(m_cmbOperType.GetCurSel()));
-}
-
-BOOL CAPMDlg::OnInitDialog()
-{
-	CDialogEx::OnInitDialog();
-
-	m_list.Create({ .hWndParent { m_hWnd }, .uID { IDC_LIST }, .fDialogCtrl { true }, .fSortable { true } });
-	m_list.SetExtendedStyle(LVS_EX_FULLROWSELECT);
-	m_list.InsertColumn(0, L"Packages", 0, 700);
-
-	using enum ADB::EPkgsType;
-	auto index = m_cmbPkgsType.AddString(L"All enabled");
-	m_cmbPkgsType.SetCurSel(index);
-	m_cmbPkgsType.SetItemData(index, std::to_underlying(PKGS_ENABLED));
-	index = m_cmbPkgsType.AddString(L"Disabled");
-	m_cmbPkgsType.SetItemData(index, std::to_underlying(PKGS_DISABLED));
-	index = m_cmbPkgsType.AddString(L"System");
-	m_cmbPkgsType.SetItemData(index, std::to_underlying(PKGS_SYSTEM));
-	index = m_cmbPkgsType.AddString(L"Third-party");
-	m_cmbPkgsType.SetItemData(index, std::to_underlying(PKGS_THRDPARTY));
-	index = m_cmbPkgsType.AddString(L"Uninstalled");
-	m_cmbPkgsType.SetItemData(index, std::to_underlying(PKGS_UNINSTALLED));
-
-	const auto uCloseServer = AfxGetApp()->GetProfileIntW(L"", L"close-adb-server-on-exit", 0);
-	CheckDlgButton(IDC_CHK_CLOSESRVONEXIT, uCloseServer > 0 ? BST_CHECKED : BST_UNCHECKED);
-	FillComboOperType();
-
-	m_menuList.LoadMenuW(IDR_MENU_LIST);
-
-	ASSERT((IDM_ABOUTBOX & 0xFFF0) == IDM_ABOUTBOX);
-	ASSERT(IDM_ABOUTBOX < 0xF000);
-	if (const auto pSysMenu = GetSystemMenu(FALSE); pSysMenu != nullptr) {
-		pSysMenu->AppendMenuW(MF_SEPARATOR);
-		pSysMenu->AppendMenuW(MF_STRING, IDM_ABOUTBOX, L"About...");
-	}
-
-	const auto hIcon = AfxGetApp()->LoadIconW(IDR_MAINFRAME);
-	SetIcon(hIcon, TRUE);
-	SetIcon(hIcon, FALSE);
-
-	//Scan for devices at dialog startup in separate thread, to not linger GUI appearance.
-	std::thread thrdDevices(&CAPMDlg::OnBtnDevices, this);
-	thrdDevices.detach();
-
-	return TRUE;
 }
 
 void CAPMDlg::OnBtnDevices()
@@ -310,7 +273,6 @@ void CAPMDlg::OnBtnPkgsOperate()
 		if (MessageBoxW(wsvMsg.data(), L"Warning!", MB_ICONINFORMATION | MB_YESNO) == IDNO) {
 			return;
 		}
-
 	}
 
 	int iItem { -1 };
@@ -323,6 +285,10 @@ void CAPMDlg::OnBtnPkgsOperate()
 
 	::Sleep(300); //Delay to correctly get renewed packages list from a device.
 	OnBtnPkgsShow();
+}
+
+void CAPMDlg::OnCancel() {
+	CDialogEx::OnCancel();
 }
 
 void CAPMDlg::OnComboDevicesSelChange()
@@ -374,6 +340,10 @@ void CAPMDlg::OnDestroy()
 	CDialogEx::OnDestroy();
 }
 
+void CAPMDlg::OnDlgLog() {
+	m_dlgLog.ShowWindow(SW_SHOW);
+}
+
 void CAPMDlg::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT pDIS)
 {
 	if (nIDCtl == IDC_LIST) {
@@ -387,6 +357,62 @@ void CAPMDlg::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT pDIS)
 void CAPMDlg::OnEditFilterChange() {
 	m_list.SetItemState(-1, 0, LVIS_SELECTED); //Unselect all.
 	RecalcIndexes();
+}
+
+BOOL CAPMDlg::OnInitDialog()
+{
+	CDialogEx::OnInitDialog();
+
+	m_list.Create({ .hWndParent { m_hWnd }, .uID { IDC_LIST }, .fDialogCtrl { true }, .fSortable { true } });
+	m_list.SetExtendedStyle(LVS_EX_FULLROWSELECT);
+	m_list.InsertColumn(0, L"Packages", 0, 700);
+
+	using enum ADB::EPkgsType;
+	auto index = m_cmbPkgsType.AddString(L"All enabled");
+	m_cmbPkgsType.SetCurSel(index);
+	m_cmbPkgsType.SetItemData(index, std::to_underlying(PKGS_ENABLED));
+	index = m_cmbPkgsType.AddString(L"Disabled");
+	m_cmbPkgsType.SetItemData(index, std::to_underlying(PKGS_DISABLED));
+	index = m_cmbPkgsType.AddString(L"System");
+	m_cmbPkgsType.SetItemData(index, std::to_underlying(PKGS_SYSTEM));
+	index = m_cmbPkgsType.AddString(L"Third-party");
+	m_cmbPkgsType.SetItemData(index, std::to_underlying(PKGS_THRDPARTY));
+	index = m_cmbPkgsType.AddString(L"Uninstalled");
+	m_cmbPkgsType.SetItemData(index, std::to_underlying(PKGS_UNINSTALLED));
+
+	const auto uCloseServer = AfxGetApp()->GetProfileIntW(L"", L"close-adb-server-on-exit", 0);
+	CheckDlgButton(IDC_CHK_CLOSESRVONEXIT, uCloseServer > 0 ? BST_CHECKED : BST_UNCHECKED);
+	FillComboOperType();
+
+	m_menuList.LoadMenuW(IDR_MENU_LIST);
+	m_dlgLog.Create(IDD_APM_LOG, this);
+	m_adb.AddLoggerHWND(m_dlgLog);
+
+	ASSERT((IDM_ABOUTBOX & 0xFFF0) == IDM_ABOUTBOX);
+	ASSERT(IDM_ABOUTBOX < 0xF000);
+	if (const auto pSysMenu = GetSystemMenu(FALSE); pSysMenu != nullptr) {
+		pSysMenu->AppendMenuW(MF_SEPARATOR);
+		pSysMenu->AppendMenuW(MF_STRING, IDM_DLGLOG, L"Log...\tCtrl+D");
+		pSysMenu->AppendMenuW(MF_SEPARATOR);
+		pSysMenu->AppendMenuW(MF_STRING, IDM_ABOUTBOX, L"About...");
+	}
+
+	const auto hIcon = AfxGetApp()->LoadIconW(IDR_MAINFRAME);
+	SetIcon(hIcon, TRUE);
+	SetIcon(hIcon, FALSE);
+
+	//Scan for devices at dialog startup in separate thread, to not linger GUI appearance.
+	std::thread thrdDevices(&CAPMDlg::OnBtnDevices, this);
+	thrdDevices.detach();
+
+	return TRUE;
+}
+
+void CAPMDlg::OnInitMenuPopup(CMenu* pPopupMenu, UINT nIndex, BOOL bSysMenu)
+{
+	CDialogEx::OnInitMenuPopup(pPopupMenu, nIndex, bSysMenu);
+
+	m_menuList.EnableMenuItem(IDM_LIST_COPY, MF_BYCOMMAND | ((m_list.GetSelectedCount() > 0) ? MF_ENABLED : MF_DISABLED));
 }
 
 void CAPMDlg::OnListColumnClick(NMHDR* pNMHDR, LRESULT* /*pResult*/)
@@ -475,15 +501,45 @@ void CAPMDlg::OnMenuListCopy()
 	::CloseClipboard();
 }
 
+void CAPMDlg::OnOK() {
+}
+
 void CAPMDlg::OnSysCommand(UINT nID, LPARAM lParam)
 {
-	if ((nID & 0xFFF0) == IDM_ABOUTBOX) {
+	const auto idMenu = (nID & 0xFFF0);
+	switch (idMenu) {
+	case IDM_ABOUTBOX:
+	{
 		CAboutDlg dlgAbout;
 		dlgAbout.DoModal();
 	}
-	else {
+	break;
+	case IDM_DLGLOG:
+		OnDlgLog();
+		break;
+	default:
 		CDialogEx::OnSysCommand(nID, lParam);
+		break;
 	}
+}
+
+BOOL CAPMDlg::PreTranslateMessage(MSG* pMsg)
+{
+	if (pMsg->message == WM_KEYDOWN) {
+		switch (pMsg->wParam) {
+		case VK_ESCAPE:
+			return TRUE;
+		case 'D':
+			if (::GetAsyncKeyState(VK_CONTROL) & 0x8000) { //Ctrl+D is pressed.
+				OnDlgLog();
+			}
+			break;
+		default:
+			break;
+		}
+	}
+
+	return CDialogEx::PreTranslateMessage(pMsg);
 }
 
 void CAPMDlg::RecalcIndexes()
@@ -499,12 +555,12 @@ void CAPMDlg::RecalcIndexes()
 
 	m_list.SetItemCountEx(static_cast<int>(m_vecFilteredIdxs.size()));
 	m_list.RedrawWindow();
-	GetDlgItem(IDC_STATIC_ITEMS_TOTAL)->SetWindowTextW(std::format(L"Total items: {}", m_vecFilteredIdxs.size()).data());
+	GetDlgItem(IDC_STAT_ITEMS_TOTAL)->SetWindowTextW(std::format(L"Total items: {}", m_vecFilteredIdxs.size()).data());
 }
 
 void CAPMDlg::SetStateBtnOperate()
 {
 	const auto uSelected = m_list.GetSelectedCount();
 	GetDlgItem(IDC_BTN_OPERATE)->EnableWindow(uSelected > 0);
-	GetDlgItem(IDC_STATIC_ITEMS_SELECTED)->SetWindowTextW(std::format(L"Selected: {}", uSelected).data());
+	GetDlgItem(IDC_STAT_ITEMS_SELECTED)->SetWindowTextW(std::format(L"Selected: {}", uSelected).data());
 }

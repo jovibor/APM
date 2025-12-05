@@ -35,6 +35,12 @@
     <ClCompile Include="CAPMApp.ixx">
       <Filter>Modules</Filter>
     </ClCompile>
+    <ClCompile Include="CAPMDlgLog.ixx">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="APMUtility.ixx">
+      <Filter>Modules</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="APM.rc">

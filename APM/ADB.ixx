@@ -2,21 +2,10 @@ module;
 #include <Windows.h>
 export module ADB;
 
+import APMUtility;
 import std;
 
 using std::operator""sv;
-
-[[nodiscard]] auto StrToWstr(std::string_view sv, UINT uCodePage = CP_UTF8) -> std::wstring
-{
-	const auto iSize = ::MultiByteToWideChar(uCodePage, 0, sv.data(), static_cast<int>(sv.size()), nullptr, 0);
-	std::wstring wstr;
-	wstr.resize_and_overwrite(iSize, [=](wchar_t* pwbuff, std::size_t sizeBuff) {
-		::MultiByteToWideChar(uCodePage, 0, sv.data(), static_cast<int>(sv.size()), pwbuff, static_cast<int>(sizeBuff));
-		return iSize;
-	});
-
-	return wstr;
-}
 
 export class ADB {
 public:
@@ -28,22 +17,30 @@ public:
 	enum class EOperType { OPER_ENABLE, OPER_DISABLE, OPER_UNINSTALL, OPER_RESTORE, OPER_INSTALL };
 	ADB() = default;
 	~ADB();
+	void AddLoggerHWND(HWND hWndLog);
 	[[nodiscard]] auto GetPackagesList(std::wstring_view wsvDevice, EPkgsType eType) -> std::vector<std::wstring>;
 	[[nodiscard]] auto GetDevices() -> std::vector<ADBDEVICE>;
 	bool KillServer();
-	bool PkgOperate(std::wstring_view wsvDevice, std::wstring_view wsvPkgName, EOperType eOper);
+	void PkgOperate(std::wstring_view wsvDevice, std::wstring_view wsvPkgName, EOperType eOper);
 	bool StartServer();
 private:
-	bool Execute(std::wstring_view wsvCMD);
+	void AddLogEntry(const ADBCMD& adbCmd);
+	void AddLogEntry(const wchar_t* pwsz);
 	void CloseHandles();
+	bool Execute(std::wstring_view wsvCMD);
 	[[nodiscard]] auto ReadFromPipe() -> std::wstring;
 private:
 	HANDLE m_hADBSTDOutRO { };
 	HANDLE m_hADBSTDOutWR { };
+	HWND m_hWndLog { };
 };
 
 ADB::~ADB() {
 	CloseHandles();
+}
+
+void ADB::AddLoggerHWND(HWND hWndLog) {
+	m_hWndLog = hWndLog;
 }
 
 auto ADB::GetPackagesList(std::wstring_view wsvDevice, EPkgsType eType)->std::vector<std::wstring>
@@ -104,17 +101,19 @@ auto ADB::GetPackagesList(std::wstring_view wsvDevice, EPkgsType eType)->std::ve
 auto ADB::GetDevices()->std::vector<ADBDEVICE>
 {
 	if (!StartServer()) {
-		::MessageBoxW(0, L"\"adb start-server\" failed.", 0, MB_ICONERROR);
 		return { };
 	}
 
-	if (!Execute(L"adb devices")) {
-		::MessageBoxW(0, L"\"adb devices\" failed.", 0, MB_ICONERROR);
+	constexpr auto pwszCmdDev = L"adb devices";
+	if (!Execute(pwszCmdDev)) {
 		return { };
 	}
+
+	ADBCMD logDev { .wstrCMD { pwszCmdDev }, .wstrAnswer { ReadFromPipe() } };
+	AddLogEntry(logDev);
 
 	//Drop first text line: "List of devices attached\r\n", and split on CRLF.
-	auto vecNamesAll = ReadFromPipe() | std::views::drop(26) | std::views::split(L"\r\n"sv)
+	auto vecNamesAll = logDev.wstrAnswer | std::views::drop(26) | std::views::split(L"\r\n"sv)
 		| std::ranges::to<std::vector<std::wstring>>();
 
 	//Device name is printed as, at least, 8 symbols, so erase any empty strings and offline devices.
@@ -124,8 +123,13 @@ auto ADB::GetDevices()->std::vector<ADBDEVICE>
 	for (const auto& wstr : vecNamesAll) {
 		if (const auto sPos = wstr.find(L"\tdevice"); sPos != std::wstring::npos) {
 			const auto wsvName = std::wstring_view(wstr).substr(0, sPos);
-			Execute(std::format(L"adb -s {} shell getprop ro.product.model", wsvName));
-			vecRet.emplace_back(ADBDEVICE { .wstrName { wsvName }, .wstrModel { ReadFromPipe() } });
+			const auto wstrCmd = std::format(L"adb -s {} shell getprop ro.product.model", wsvName);
+			if (!Execute(wstrCmd)) {
+				break;
+			}
+			ADBCMD logDevModel { .wstrCMD { std::move(wstrCmd) }, .wstrAnswer { ReadFromPipe() } };
+			AddLogEntry(logDevModel);
+			vecRet.emplace_back(ADBDEVICE { .wstrName { wsvName }, .wstrModel { std::move(logDevModel.wstrAnswer) } });
 		}
 	}
 
@@ -133,10 +137,17 @@ auto ADB::GetDevices()->std::vector<ADBDEVICE>
 }
 
 bool ADB::KillServer() {
-	return Execute(L"adb kill-server");
+	constexpr auto pwszCmd = L"adb kill-server";
+	if (!Execute(pwszCmd)) {
+		return false;
+	}
+
+	AddLogEntry({ .wstrCMD { pwszCmd }, .wstrAnswer { ReadFromPipe() } });
+
+	return true;
 }
 
-bool ADB::PkgOperate(std::wstring_view wsvDevice, std::wstring_view wsvPkgName, EOperType eOper)
+void ADB::PkgOperate(std::wstring_view wsvDevice, std::wstring_view wsvPkgName, EOperType eOper)
 {
 	using enum EOperType;
 
@@ -158,22 +169,56 @@ bool ADB::PkgOperate(std::wstring_view wsvDevice, std::wstring_view wsvPkgName, 
 		wsvFmt = L"adb -s {} install --user 0 {}";
 		break;
 	default:
-		return false;
+		return;
 	}
 
-	return Execute(std::vformat(wsvFmt, std::make_wformat_args(wsvDevice, wsvPkgName)));
+	ADBCMD adbCmd { .wstrCMD { std::vformat(wsvFmt, std::make_wformat_args(wsvDevice, wsvPkgName)) } };
+	Execute(adbCmd.wstrCMD);
+	adbCmd.wstrAnswer = ReadFromPipe();
+	AddLogEntry(adbCmd);
 }
 
 bool ADB::StartServer() {
-	if (!Execute(L"adb start-server")) {
+	constexpr auto pwszCmd = L"adb start-server";
+	if (!Execute(pwszCmd)) {
 		return false;
 	}
 
-	::Sleep(200); //Delay for ADB server to start properly.
+	AddLogEntry({ .wstrCMD { pwszCmd }, .wstrAnswer { ReadFromPipe() } });
+	::Sleep(300); //Delay for ADB server to start properly.
+
 	return true;
 }
 
+
 //Private methods.
+
+void ADB::AddLogEntry(const ADBCMD& adbCmd)
+{
+	static const auto hWnd = ::GetDesktopWindow();
+	const NMHDR hdr { .hwndFrom { hWnd }, .code { WM_NOTIFYCODE_LOG_ADB } };
+	::SendMessageW(m_hWndLog, WM_NOTIFY, reinterpret_cast<WPARAM>(&adbCmd), reinterpret_cast<LPARAM>(&hdr));
+}
+
+void ADB::AddLogEntry(const wchar_t* pwsz)
+{
+	const NMHDR hdr { .hwndFrom { ::GetDesktopWindow() }, .code { WM_NOTIFYCODE_LOG_ERROR } };
+	::SendMessageW(m_hWndLog, WM_NOTIFY, reinterpret_cast<WPARAM>(pwsz), reinterpret_cast<LPARAM>(&hdr));
+}
+
+void ADB::CloseHandles()
+{
+	if (m_hADBSTDOutWR != nullptr) {
+		::CloseHandle(m_hADBSTDOutWR);
+	}
+
+	if (m_hADBSTDOutRO != nullptr) {
+		::CloseHandle(m_hADBSTDOutRO);
+	}
+
+	m_hADBSTDOutWR = nullptr;
+	m_hADBSTDOutRO = nullptr;
+}
 
 bool ADB::Execute(std::wstring_view wsvCMD)
 {
@@ -191,6 +236,8 @@ bool ADB::Execute(std::wstring_view wsvCMD)
 	if (::CreateProcessW(nullptr, wstrProc.data(), nullptr, nullptr, TRUE,
 		CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi) == FALSE) {
 		CloseHandles();
+		const auto wstrErr = L"CreateProcessW failed with: " + wstrProc;
+		AddLogEntry(wstrErr.data());
 		return false;
 	}
 
@@ -201,20 +248,6 @@ bool ADB::Execute(std::wstring_view wsvCMD)
 	m_hADBSTDOutWR = nullptr;
 
 	return true;
-}
-
-void ADB::CloseHandles()
-{
-	if (m_hADBSTDOutWR != nullptr) {
-		::CloseHandle(m_hADBSTDOutWR);
-	}
-
-	if (m_hADBSTDOutRO != nullptr) {
-		::CloseHandle(m_hADBSTDOutRO);
-	}
-
-	m_hADBSTDOutWR = nullptr;
-	m_hADBSTDOutRO = nullptr;
 }
 
 auto ADB::ReadFromPipe()->std::wstring
