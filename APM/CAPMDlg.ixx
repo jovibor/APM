@@ -178,7 +178,8 @@ void CAPMDlg::OnBtnDevices()
 
 	if (!m_vecDevices.empty()) {
 		for (const auto& [index, dev] : std::views::enumerate(m_vecDevices)) {
-			const auto wstr = std::format(L"{} ({})", dev.wstrModel, dev.wstrName);
+			const auto wstr = std::format(L"{} (Android {}, S/N: {})",
+				dev.wstrModelName, dev.wstrAndroidVer, dev.wstrSerialNumber);
 			m_cmbDevices.SetItemData(m_cmbDevices.AddString(wstr.data()), index);
 		}
 
@@ -227,7 +228,7 @@ void CAPMDlg::OnBtnInstallAPK()
 		wchar_t* pwszPath;
 		pItem->GetDisplayName(SIGDN_FILESYSPATH, &pwszPath);
 		const std::wstring wstrAPK = L"\"" + std::wstring(pwszPath) + L"\""; //Put path in quotes.
-		m_adb.PkgOperate(GetCurrDevice().wstrName, wstrAPK, ADB::EOperType::OPER_INSTALL);
+		m_adb.PkgOperate(GetCurrDevice().wstrSerialNumber, wstrAPK, ADB::EOperType::OPER_INSTALL);
 		pItem->Release();
 		::CoTaskMemFree(pwszPath);
 	}
@@ -246,7 +247,7 @@ void CAPMDlg::OnBtnPkgsShow()
 
 	m_vecListItems.clear();
 
-	for (auto& wstr : m_adb.GetPackagesList(GetCurrDevice().wstrName, GetCurrPkgsType())) {
+	for (auto& wstr : m_adb.GetPackagesList(GetCurrDevice().wstrSerialNumber, GetCurrPkgsType())) {
 		m_vecListItems.emplace_back(std::move(wstr), false);
 	}
 
@@ -278,7 +279,7 @@ void CAPMDlg::OnBtnPkgsOperate()
 	int iItem { -1 };
 	for (auto i { 0UL }; i < m_list.GetSelectedCount(); ++i) {
 		iItem = m_list.GetNextItem(iItem, LVNI_SELECTED);
-		m_adb.PkgOperate(GetCurrDevice().wstrName, m_vecListItems[m_vecFilteredIdxs[iItem]].wstrData, eOperType);
+		m_adb.PkgOperate(GetCurrDevice().wstrSerialNumber, m_vecListItems[m_vecFilteredIdxs[iItem]].wstrData, eOperType);
 	}
 	m_list.SetItemState(-1, 0, LVIS_SELECTED); //Unselect all.
 	m_list.RedrawWindow();

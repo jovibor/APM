@@ -10,8 +10,9 @@ using std::operator""sv;
 export class ADB {
 public:
 	struct ADBDEVICE {
-		std::wstring wstrName;
-		std::wstring wstrModel;
+		std::wstring wstrSerialNumber;
+		std::wstring wstrModelName;
+		std::wstring wstrAndroidVer;
 	};
 	enum class EPkgsType { PKGS_ENABLED, PKGS_DISABLED, PKGS_SYSTEM, PKGS_THRDPARTY, PKGS_UNINSTALLED };
 	enum class EOperType { OPER_ENABLE, OPER_DISABLE, OPER_UNINSTALL, OPER_RESTORE, OPER_INSTALL };
@@ -122,14 +123,24 @@ auto ADB::GetDevices()->std::vector<ADBDEVICE>
 	std::vector<ADBDEVICE> vecRet;
 	for (const auto& wstr : vecNamesAll) {
 		if (const auto sPos = wstr.find(L"\tdevice"); sPos != std::wstring::npos) {
-			const auto wsvName = std::wstring_view(wstr).substr(0, sPos);
-			const auto wstrCmd = std::format(L"adb -s {} shell getprop ro.product.model", wsvName);
-			if (!Execute(wstrCmd)) {
-				break;
-			}
-			ADBCMD logDevModel { .wstrCMD { std::move(wstrCmd) }, .wstrAnswer { ReadFromPipe() } };
-			AddLogEntry(logDevModel);
-			vecRet.emplace_back(ADBDEVICE { .wstrName { wsvName }, .wstrModel { std::move(logDevModel.wstrAnswer) } });
+			const auto wsvDevName = std::wstring_view(wstr).substr(0, sPos);
+			ADBDEVICE adbDevice { .wstrSerialNumber { wsvDevName } };
+
+			logDev.wstrCMD = std::format(L"adb -s {} shell getprop ro.product.model", wsvDevName);
+			if (!Execute(logDev.wstrCMD)) { break; }
+
+			logDev.wstrAnswer = ReadFromPipe();
+			AddLogEntry(logDev);
+			adbDevice.wstrModelName = std::move(logDev.wstrAnswer);
+
+			logDev.wstrCMD = std::format(L"adb -s {} shell getprop ro.build.version.release", wsvDevName);
+			if (!Execute(logDev.wstrCMD)) { break; }
+
+			logDev.wstrAnswer = ReadFromPipe();
+			AddLogEntry(logDev);
+			adbDevice.wstrAndroidVer = std::move(logDev.wstrAnswer);
+
+			vecRet.emplace_back(adbDevice);
 		}
 	}
 
