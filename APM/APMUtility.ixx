@@ -1,5 +1,6 @@
 module;
 #include <Windows.h>
+#include <ShObjIdl_core.h>
 export module APMUtility;
 
 import std;
@@ -17,6 +18,40 @@ export {
 		});
 
 		return wstr;
+	}
+
+	[[nodiscard]] auto DlgGetFolderPath(bool fQuote = false) -> std::optional<std::wstring> {
+		IFileOpenDialog *pIFOD { };
+		if (::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pIFOD)) != S_OK) {
+			return std::nullopt;
+		}
+
+		DWORD dwFlags;
+		pIFOD->GetOptions(&dwFlags);
+		pIFOD->SetOptions(dwFlags | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_DONTADDTORECENT | FOS_PATHMUSTEXIST);
+
+		if (pIFOD->Show(nullptr) != S_OK) { //Cancel was pressed.
+			return std::nullopt;
+		}
+
+		IShellItem* pShellItem { };
+		if (pIFOD->GetResult(&pShellItem); pShellItem == nullptr) {
+			return std::nullopt;
+		}
+
+		std::optional<std::wstring> optRet;
+		wchar_t* pwszPath { };
+		if (pShellItem->GetDisplayName(SIGDN_FILESYSPATH, &pwszPath) != S_OK) {
+			return std::nullopt;
+		}
+
+		//Put path in quotes or not?
+		optRet = fQuote ? L'\"' + std::wstring { pwszPath } + L'\"' : pwszPath;
+		::CoTaskMemFree(pwszPath);
+		pShellItem->Release();
+		pIFOD->Release();
+
+		return optRet;
 	}
 
 	struct ADBCMD {

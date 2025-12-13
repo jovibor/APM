@@ -15,7 +15,7 @@ public:
 		std::wstring wstrAndroidVer;
 	};
 	enum class EPkgsType { PKGS_ENABLED, PKGS_DISABLED, PKGS_SYSTEM, PKGS_THRDPARTY, PKGS_UNINSTALLED };
-	enum class EOperType { OPER_ENABLE, OPER_DISABLE, OPER_UNINSTALL, OPER_RESTORE, OPER_INSTALL };
+	enum class EOperType { OPER_ENABLE, OPER_DISABLE, OPER_UNINSTALL, OPER_RESTORE, OPER_INSTALL, OPER_SAVE };
 	ADB() = default;
 	~ADB();
 	void AddLoggerHWND(HWND hWndLog);
@@ -23,6 +23,7 @@ public:
 	[[nodiscard]] auto GetDevices() -> std::vector<ADBDEVICE>;
 	bool KillServer();
 	void PkgOperate(std::wstring_view wsvDevice, std::wstring_view wsvPkgName, EOperType eOper);
+	void PkgSave(std::wstring_view wsvDevice, std::wstring_view wsvPkgName, std::wstring_view wsvSavePath);
 	bool StartServer();
 private:
 	void AddLogEntry(const ADBCMD& adbCmd);
@@ -184,6 +185,26 @@ void ADB::PkgOperate(std::wstring_view wsvDevice, std::wstring_view wsvPkgName, 
 	}
 
 	ADBCMD adbCmd { .wstrCMD { std::vformat(wsvFmt, std::make_wformat_args(wsvDevice, wsvPkgName)) } };
+	Execute(adbCmd.wstrCMD);
+	adbCmd.wstrAnswer = ReadFromPipe();
+	AddLogEntry(adbCmd);
+}
+
+void ADB::PkgSave(std::wstring_view wsvDevice, std::wstring_view wsvPkgName, std::wstring_view wsvSavePath)
+{
+	ADBCMD adbCmd { .wstrCMD { std::format(L"adb -s {} shell pm path {}", wsvDevice, wsvPkgName) } };
+	Execute(adbCmd.wstrCMD);
+	adbCmd.wstrAnswer = ReadFromPipe();
+	AddLogEntry(adbCmd);
+	if (!adbCmd.wstrAnswer.starts_with(L"package:")) {
+		return;
+	}
+
+	const auto sCR = adbCmd.wstrAnswer.find(L'\r'); //Find the first caret return (CR).
+
+	//Remove 8 first chars ("package:"), and take the rest untill caret return.
+	const auto wsvAPKPath = std::wstring_view { adbCmd.wstrAnswer }.substr(8, sCR - 8);
+	adbCmd.wstrCMD = std::format(L"adb -s {} pull {} {}", wsvDevice, wsvAPKPath, wsvSavePath);
 	Execute(adbCmd.wstrCMD);
 	adbCmd.wstrAnswer = ReadFromPipe();
 	AddLogEntry(adbCmd);

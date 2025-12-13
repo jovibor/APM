@@ -49,10 +49,11 @@ private:
 	[[nodiscard]] auto GetCurrDevice()const -> const ADB::ADBDEVICE&;
 	[[nodiscard]] auto GetCurrPkgsType()const -> ADB::EPkgsType;
 	[[nodiscard]] auto GetCurrOperType()const -> ADB::EOperType;
+	[[nodiscard]] auto GetSelectedPkgs()const -> std::vector<std::wstring_view>;
 	afx_msg void OnBtnDevices();
 	afx_msg void OnBtnInstallAPK();
 	afx_msg void OnBtnPkgsShow();
-	afx_msg void OnBtnPkgsOperate();
+	afx_msg void OnBtnOperate();
 	void OnCancel()override;
 	afx_msg void OnComboDevicesSelChange();
 	afx_msg void OnComboPkgsTypesSelChange();
@@ -70,6 +71,11 @@ private:
 	afx_msg void OnMeasureItem(int nIDCtl, LPMEASUREITEMSTRUCT pMIS);
 	afx_msg void OnMenuListCopy();
 	void OnOK()override;
+	void OnOperEnable();
+	void OnOperDisable();
+	void OnOperUninstall();
+	void OnOperRestore();
+	void OnOperSave();
 	afx_msg void OnSysCommand(UINT nID, LPARAM lParam);
 	BOOL PreTranslateMessage(MSG* pMsg)override;
 	void RecalcIndexes();
@@ -96,7 +102,7 @@ BEGIN_MESSAGE_MAP(CAPMDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BTN_DEVICES, &CAPMDlg::OnBtnDevices)
 	ON_BN_CLICKED(IDC_BTN_INSTALL, &CAPMDlg::OnBtnInstallAPK)
 	ON_BN_CLICKED(IDC_BTN_PKGSSHOW, &CAPMDlg::OnBtnPkgsShow)
-	ON_BN_CLICKED(IDC_BTN_OPERATE, &CAPMDlg::OnBtnPkgsOperate)
+	ON_BN_CLICKED(IDC_BTN_OPERATE, &CAPMDlg::OnBtnOperate)
 	ON_CBN_SELCHANGE(IDC_CMB_DEVICES, &CAPMDlg::OnComboDevicesSelChange)
 	ON_CBN_SELCHANGE(IDC_CMB_PKGSTYPE, &CAPMDlg::OnComboPkgsTypesSelChange)
 	ON_CBN_SELCHANGE(IDC_CMB_OPERTYPE, &CAPMDlg::OnComboOperTypeSelChange)
@@ -150,6 +156,9 @@ void CAPMDlg::FillComboOperType()
 	default:
 		break;
 	}
+
+	index = m_cmbOperType.AddString(L"Save to PC");
+	m_cmbOperType.SetItemData(index, std::to_underlying(OPER_SAVE));
 	m_cmbOperType.SetCurSel(0);
 
 	OnComboOperTypeSelChange();
@@ -165,6 +174,19 @@ auto CAPMDlg::GetCurrPkgsType()const->ADB::EPkgsType {
 
 auto CAPMDlg::GetCurrOperType()const->ADB::EOperType {
 	return static_cast<ADB::EOperType>(m_cmbOperType.GetItemData(m_cmbOperType.GetCurSel()));
+}
+
+auto CAPMDlg::GetSelectedPkgs()const->std::vector<std::wstring_view>
+{
+	std::vector<std::wstring_view> vecRet;
+	vecRet.reserve(m_list.GetSelectedCount());
+	int iItem { -1 };
+	for (auto i { 0UL }; i < m_list.GetSelectedCount(); ++i) {
+		iItem = m_list.GetNextItem(iItem, LVNI_SELECTED);
+		vecRet.emplace_back(m_vecListItems[m_vecFilteredIdxs[iItem]].wstrData);
+	}
+
+	return vecRet;
 }
 
 void CAPMDlg::OnBtnDevices()
@@ -240,6 +262,35 @@ void CAPMDlg::OnBtnInstallAPK()
 	OnBtnPkgsShow();
 }
 
+void CAPMDlg::OnBtnOperate()
+{
+	using enum ADB::EOperType;
+	switch (GetCurrOperType()) {
+	case OPER_ENABLE:
+		OnOperEnable();
+		break;
+	case OPER_DISABLE:
+		OnOperDisable();
+		break;
+	case OPER_UNINSTALL:
+		OnOperUninstall();
+		break;
+	case OPER_RESTORE:
+		OnOperRestore();
+		break;
+	case OPER_SAVE:
+		OnOperSave();
+		break;
+	default:
+		break;
+	}
+
+	m_list.SetItemState(-1, 0, LVIS_SELECTED); //Unselect all.
+	m_list.RedrawWindow();
+	::Sleep(300); //Delay to correctly get renewed packages list from the device.
+	OnBtnPkgsShow();
+}
+
 void CAPMDlg::OnBtnPkgsShow()
 {
 	if (m_vecDevices.empty())
@@ -252,40 +303,6 @@ void CAPMDlg::OnBtnPkgsShow()
 	}
 
 	RecalcIndexes();
-}
-
-void CAPMDlg::OnBtnPkgsOperate()
-{
-	using enum ADB::EOperType;
-	const auto eOperType = GetCurrOperType();
-	if (eOperType == OPER_UNINSTALL || eOperType == OPER_DISABLE) {
-		std::wstring_view wsvMsg;
-		switch (eOperType) {
-		case OPER_UNINSTALL:
-			wsvMsg = L"All selected packages will be uninstalled from your device.\r\nAre you sure?";
-			break;
-		case OPER_DISABLE:
-			wsvMsg = L"All selected packages will be disabled on your device.\r\nAre you sure?";
-			break;
-		default:
-			break;
-		}
-
-		if (MessageBoxW(wsvMsg.data(), L"Warning!", MB_ICONINFORMATION | MB_YESNO) == IDNO) {
-			return;
-		}
-	}
-
-	int iItem { -1 };
-	for (auto i { 0UL }; i < m_list.GetSelectedCount(); ++i) {
-		iItem = m_list.GetNextItem(iItem, LVNI_SELECTED);
-		m_adb.PkgOperate(GetCurrDevice().wstrSerialNumber, m_vecListItems[m_vecFilteredIdxs[iItem]].wstrData, eOperType);
-	}
-	m_list.SetItemState(-1, 0, LVIS_SELECTED); //Unselect all.
-	m_list.RedrawWindow();
-
-	::Sleep(300); //Delay to correctly get renewed packages list from a device.
-	OnBtnPkgsShow();
 }
 
 void CAPMDlg::OnCancel() {
@@ -321,6 +338,9 @@ void CAPMDlg::OnComboOperTypeSelChange()
 		break;
 	case OPER_RESTORE:
 		wsvName = L"Restore";
+		break;
+	case OPER_SAVE:
+		wsvName = L"Save...";
 		break;
 	default:
 		break;
@@ -503,6 +523,58 @@ void CAPMDlg::OnMenuListCopy()
 }
 
 void CAPMDlg::OnOK() {
+}
+
+void CAPMDlg::OnOperEnable()
+{
+	for (const auto wsv : GetSelectedPkgs()) {
+		m_adb.PkgOperate(GetCurrDevice().wstrSerialNumber, wsv, ADB::EOperType::OPER_ENABLE);
+	}
+}
+
+void CAPMDlg::OnOperDisable()
+{
+	if (MessageBoxW(L"All selected packages will be disabled on your device.\r\nAre you sure?",
+		L"Warning!", MB_ICONINFORMATION | MB_YESNO) == IDNO) {
+		return;
+	}
+
+	for (const auto wsv : GetSelectedPkgs()) {
+		m_adb.PkgOperate(GetCurrDevice().wstrSerialNumber, wsv, ADB::EOperType::OPER_DISABLE);
+	}
+}
+
+void CAPMDlg::OnOperUninstall()
+{
+	if (MessageBoxW(L"All selected packages will be uninstalled from your device.\r\nAre you sure?",
+		L"Warning!", MB_ICONINFORMATION | MB_YESNO) == IDNO) {
+		return;
+	}
+
+	for (const auto wsv : GetSelectedPkgs()) {
+		m_adb.PkgOperate(GetCurrDevice().wstrSerialNumber, wsv, ADB::EOperType::OPER_UNINSTALL);
+	}
+}
+
+void CAPMDlg::OnOperRestore()
+{
+	for (const auto wsv : GetSelectedPkgs()) {
+		m_adb.PkgOperate(GetCurrDevice().wstrSerialNumber, wsv, ADB::EOperType::OPER_RESTORE);
+	}
+}
+
+void CAPMDlg::OnOperSave()
+{
+	auto opt = DlgGetFolderPath(true);
+	if (!opt) { return; }
+
+	if (opt.value().size() == 5) { //It means a disk root path was selected (e.g. "C:\").
+		opt.value().insert(4, 1, L'.'); //Add a dot at the end of the path: ("C:\.").
+	}
+
+	for (const auto wsv : GetSelectedPkgs()) {
+		m_adb.PkgSave(GetCurrDevice().wstrSerialNumber, wsv, *opt);
+	}
 }
 
 void CAPMDlg::OnSysCommand(UINT nID, LPARAM lParam)
